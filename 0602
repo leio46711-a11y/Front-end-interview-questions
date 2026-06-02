@@ -1,0 +1,136 @@
+## 一面：JS底层 + 浏览器基础（基础原理手撕题）
+## 一、JS核心
+### 1. 作用域/闭包
+1）**作用域：**全局、函数、块级；`var`函数作用域、`let/const`块级作用域、TDZ暂时性死区（声明到赋值前不能访问）。
+2）**闭包：**内层函数引用外层变量，内层被外部引用形成；
+**用处：**私有变量、缓存、模块化、防抖节流；
+**泄漏：**全局挂载、定时器/事件未销毁；**优化：WeakMap弱引用。**
+> 口诀：函数嵌套+内部引用外部变量+函数外流=闭包
+
+### 2. this五规则（优先级：new>bind>call/apply>隐式>默认）
+1. 默认：全局this=window，严格模式undefined
+2. 隐式：`obj.fn()` this=obj
+3. call/apply/bind：手动绑定this
+4. new：this指向实例
+5. 箭头：无this，继承外层词法this，不能new、不能bind
+
+### 3. 原型链
+- `prototype`：构造函数属性，存实例公用方法
+- `__proto__`：实例属性，指向构造函数prototype
+- 查找：实例自身→`__proto__`→父原型→Object.prototype→null
+- ES6 class是构造函数语法糖，基于原型实现
+
+### 4. 异步&事件循环
+1）**宏任务：**script整体、setTimeout、setInterval、I/O、UI渲染
+2）**微任务：**Promise.then/catch、queueMicrotask、await之后代码
+**执行顺序：**同步代码→所有微任务→一轮宏任务
+> Node11后和浏览器执行逻辑一致；Node10及以下整轮宏+整轮微
+
+### 5. Promise
+1. 三种状态：pending/fulfilled/rejected，状态不可逆
+2. then链式，异常穿透：无失败回调自动向后抛错
+3. `all`全部成功才resolve，一个失败立刻reject；`race`谁先出结果用谁
+
+### 6. 深浅拷贝
+- **浅拷贝：**拓展运算符、Object.assign、slice，只拷贝一层，引用属性共用地址
+- **深拷贝：**递归遍历(处理Date/RegExp/循环引用)、`structuredClone`(浏览器原生)；JSON.parse不能拷贝函数/正则/日期
+
+### 7. 垃圾回收V8
+- **新生代Scavenge：**From-To空间复制算法，频繁GC
+- **老生代：**标记清除+标记整理，大对象直接进老生代
+**内存泄漏：**意外全局、闭包常驻、定时器未清、DOM元素未解绑事件、全局缓存无限膨胀
+
+## 二、浏览器&网络
+### 1. 页面渲染流程
+DNS解析→TCP握手→HTTP请求→HTML→DOM、CSS→CSSOM→RenderTree→Layout布局→Paint绘制→Composite分层合成
+**四大指标：**FP首次渲染、FCP首内容、LCP最大内容、CLS偏移、TTI可交互
+
+### 2. 缓存
+**强缓存（不发请求）：**Cache-Control(max-age) > Expires；
+**协商缓存（发请求304）：**Etag(优先级高) > Last-Modified；
+**缓存策略：**打包文件名带hash，改动hash变，浏览器重新拉取。
+
+### 3. 跨域
+同源：协议+域名+端口任一不同跨域
+1. CORS：简单请求(GET/POST/HEAD无自定义头)、预检OPTIONS(非简单请求先发options校验)；后端配置Access-Control-Allow-Origin
+2. JSONP：script标签不受跨域限制，只支持GET
+3. Nginx反向代理、BFF层转发、postMessage、WebSocket
+
+### 4. HTTP区别
+- HTTP1.1：长连接、管线化、队头阻塞
+- HTTP2：二进制帧、多路复用、头部压缩、服务端推送
+- HTTP3：基于UDP QUIC，解决TCP握手、队头阻塞
+- HTTPS=HTTP+TLS，非对称加密交换密钥，对称加密传输数据
+
+### 5. 前端安全
+- XSS：存储/反射/DOM型；防御：输入转义、CSP、cookie加HttpOnly
+- CSRF：利用用户cookie跨站请求；防御：请求token、SameSite=Strict
+
+### 6. BFC
+**触发：**float非none、overflow非visible、display:flex/inline-block、position:absolute/fixed；
+**作用：**清除浮动、解决margin塌陷、自适应两栏布局
+
+## 二面：Vue3+React + 工程化
+## 一、Vue3
+1. **响应式：Proxy替代defineProperty**
+defineProperty：只能监听已有属性、无法监听数组下标/新增删除；Proxy代理整个对象，可监听新增/删除/数组，搭配Reflect。
+**依赖收集：**target→key→effect(WeakMap<对象,Map<属性,Set副作用>>)，取值收集依赖，赋值触发更新。
+2. ref基本类型靠`get/set`，reactive对象Proxy；toRef拆分单个属性保持响应式，toRefs批量拆分
+3. computed带缓存，依赖不变不执行；watch监听数据变化
+4. Diff：同层对比+key，Vue3优化最长递增子序列减少DOM移动；PatchFlags标记动态节点、静态提升减少创建开销
+5. KeepAlive缓存组件，activated/deactivated；Teleport挂载到任意DOM；Suspense处理异步组件
+
+## 二、React
+1. Fiber：拆任务为可中断单元，协调阶段可切片暂停，提交阶段一次性渲染不可中断
+2. useState：闭包陷阱是渲染快照；useMemo缓存值、useCallback缓存函数，**避免盲目使用增加开销**
+3. 合成事件：顶层委托document，统一事件池，和原生冒泡顺序不一致
+4. RSC：服务端组件不打包JS到客户端，直出HTML，减少客户端体积
+
+## 三、工程化
+### 1. Webpack/Vite
+1. Webpack：Loader转译资源，Plugin生命周期钩子；HMR热更新：文件改动→编译→推送更新模块；splitChunks分包公共依赖
+2. Vite：开发ESModule+esbuild预构建，无需打包；生产Rollup打包；Tree-Shaking：ESM+production+无副作用代码才生效
+### 2. TS工具类型
+`Partial`全可选、`Required`全必填、`Pick`挑选字段、`Omit`剔除字段、`Record`键值约束
+
+### 3. Monorepo：pnpm workspace/lerna统一管理多包、统一版本发布
+### 4. 代码规范：Eslint+Prettier+husky+lint-staged+commitlint
+
+## 三面：性能优化+架构+场景题（10年核心）
+## 一、全链路性能优化（背诵标准答案）
+1. **网络**：gzip/brotli压缩、CDN、图片webp/avif懒加载、dns-prefetch/preload预加载
+2. **打包**：路由懒加载、splitChunks抽公共包、externals引入CDN依赖、资源hash缓存
+3. **渲染**：虚拟列表处理十万大数据、SSR/SSG提升首屏、骨架屏、减少DOM操作、避免频繁重排
+4. **运行**：销毁定时器/事件监听、避免全局滥用、大计算WebWorker
+
+## 二、架构问题
+1. **微前端选型：qiankun**
+JS沙箱(快照/Proxy沙箱防全局污染)、CSS隔离(命名空间/ShadowDOM)、应用通信(全局事件/状态中心)；iframe隔离最好但体验差。
+2. **组件库落地：**样式less/Styled-components、按需引入、自动化文档、单元测试、版本管理
+3. **BFF：**接口聚合、参数适配、权限校验，前后端解耦
+
+## 三、高频场景题（面试必问）
+1. **10万条列表不卡顿：**虚拟列表(只渲染可视区域)+分页+分片requestIdleCallback分批渲染
+2. **线上白屏排查：**错误监控+sourceMap定位源码、查看资源请求404、JS报错、CDN异常、路由配置
+3. **首屏LCP过大：**大图片压缩+懒加载、大组件拆分、关键CSS内联、替换大体积第三方包、服务端直出HTML
+
+## 四、手写代码（面试现场）
+1. 防抖(触发延迟执行，短时间多次只最后一次)、节流(固定间隔执行)
+2. 简易Promise、new实现、数组扁平化、去重
+```js
+//防抖
+function debounce(fn,delay){
+  let t=null;
+  return (...args)=>{clearTimeout(t);t=setTimeout(()=>fn(...args),delay)}
+}
+```
+
+## 五、管理岗附加（资深/小组长）
+1. 技术选型：业务体量、生态、维护成本、团队学习成本、后续迭代
+2. 项目排期：拆分里程碑、预留缓冲时间、提前识别需求变更风险
+3. 团队建设：统一技术规范、新人带教、沉淀组件/工具库
+
+# 附加2026新考点
+1. Wasm：密集计算(表格解析、图像处理)，替代JS重型运算
+2. 前端监控：采集性能指标、JS错误、接口异常，上报后台分析
+3. PWA ServiceWorker实现离线缓存
