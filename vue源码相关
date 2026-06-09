@@ -1,0 +1,415 @@
+1、在vue的{{}}里&lt;测试&gt;会展示成什么
+下面我把内容整理为标准 **Markdown 文本**，你直接复制全部内容，在本地新建 `.md` 文件粘贴保存即可。
+
+# Vue 源码高频考点梳理
+## 一、通用基础考点（Vue2 + Vue3 通用）
+### 1. Vue 整体运行流程
+#### 设问
+`new Vue()` / `createApp()` 之后完整执行流程？
+
+#### 核心流程
+1. 初始化实例，执行入口初始化方法
+2. 合并组件配置项（data、props、methods 等）
+3. 初始化生命周期、事件、渲染环境
+4. 对数据做**响应式劫持**
+5. 模板编译：`template → AST → render 函数`
+6. 执行 render 生成 **VNode 虚拟节点**
+7. 执行 `patch` 做 Diff 对比，生成真实 DOM 并挂载
+8. 数据变更触发响应式，异步更新视图
+
+#### 源码入口
+- Vue2：`src/core/instance/init.js`
+- Vue3：`runtime-core/createApp.ts`
+
+---
+
+### 2. 虚拟 DOM（VNode）
+#### 设问
+什么是虚拟 DOM？作用与核心结构？
+
+#### 实现原理
+虚拟 DOM 是**用 JS 对象描述 DOM 结构**。
+简化结构：
+```js
+{
+  tag: 'div',
+  props: {},
+  children: [],
+  text: '',
+  el: 真实DOM,
+  key: ''
+}
+```
+
+#### 作用
+1. 屏蔽 DOM 差异，实现跨平台渲染
+2. 减少频繁 DOM 操作，通过 Diff 只更新差异部分
+
+#### 源码位置
+- Vue2：`src/core/vdom/vnode.js`
+- Vue3：`runtime-core/vnode.ts`
+
+---
+
+### 3. Diff 算法（必考）
+#### 设问
+Diff 规则、key 作用、Vue2 / Vue3 Diff 差异？
+
+#### 通用规则
+1. **同层级比较**，不跨层级移动 DOM（性能优化）
+2. 节点标签不同：直接销毁重建；标签相同：对比属性、子节点
+
+#### Vue2 双端 Diff
+- 维护**新旧列表首尾四个指针**，双端交叉比对
+- 四种命中场景：头头、尾尾、头尾、尾头
+- 未命中则通过 key 查找节点并移动，最后处理增删
+- 缺点：长乱序列表性能一般
+
+#### Vue3 Diff 优化
+1. 建立 `key` 与索引映射表
+2. 计算**最长递增子序列**，序列内节点不移动
+3. 编译阶段配合 `PatchFlag`、静态提升，大幅缩小 Diff 范围
+
+#### Key 相关
+- 作用：作为节点唯一标识，精准复用 VNode
+- 不建议用 `index` 做 key：列表增删后索引错乱，导致节点复用异常、状态出错
+- 无 key：就地更新，性能差且易出 bug
+
+#### 源码位置
+- Vue2：`src/core/vdom/patch.js`
+- Vue3：`runtime-core/renderer.ts`
+
+---
+
+## 二、响应式系统（核心重点）
+### 1. Vue2 响应式：Object.defineProperty
+#### 设问
+Vue2 响应式原理、数组处理、存在缺陷？
+
+#### 核心实现
+遍历对象属性，劫持 `getter / setter`：
+```js
+function defineReactive(obj, key, val) {
+  Object.defineProperty(obj, key, {
+    get() {
+      dep.depend() // 依赖收集
+      return val
+    },
+    set(newVal) {
+      if (newVal === val) return
+      val = newVal
+      dep.notify() // 触发视图更新
+    }
+  })
+}
+```
+
+#### 三大核心角色
+- **Observer**：遍历对象，转为响应式
+- **Dep**：依赖容器，收集所有关联 Watcher
+- **Watcher**：渲染 Watcher、计算属性 Watcher、自定义 Watch
+
+#### 数组处理
+`Object.defineProperty` 无法监听数组下标、长度变更，因此**重写 7 个变异方法**：
+`push / pop / shift / unshift / splice / sort / reverse`，拦截后手动触发更新。
+
+#### Vue2 响应式缺陷
+1. 无法监听对象**新增、删除属性**（需 `$set`）
+2. 无法监听数组下标、`length` 修改
+3. 初始化递归遍历深层对象，性能开销大
+
+#### 源码位置
+`src/core/observer/` 目录
+
+---
+
+### 2. Vue3 响应式：Proxy + Reflect
+#### 设问
+为什么改用 Proxy？`reactive / ref / toRef` 区别？
+
+#### 核心实现
+劫持**整个对象**，而非单个属性：
+```js
+function reactive(target) {
+  return new Proxy(target, {
+    get(target, key, receiver) {
+      track(target, key) // 依赖收集
+      return Reflect.get(target, key, receiver)
+    },
+    set(target, key, value, receiver) {
+      const oldVal = Reflect.get(target, key, receiver)
+      const res = Reflect.set(target, key, value, receiver)
+      if (oldVal !== value) {
+        trigger(target, key) // 触发更新
+      }
+      return res
+    },
+    deleteProperty(target, key) {
+      const res = Reflect.deleteProperty(target, key)
+      if (res) trigger(target, key)
+      return res
+    }
+  })
+}
+```
+
+#### Proxy 优势
+1. 支持监听属性新增、删除、数组下标、数组长度
+2. 拦截种类更多（13 种操作）
+3. **惰性劫持**：仅访问嵌套属性时才递归响应式，初始化性能更好
+
+#### 核心 API 区分
+1. **reactive**：处理引用类型，返回 Proxy，直接解构会丢失响应式
+2. **ref**：处理基本数据类型，内部包裹对象，需通过 `.value` 读写
+3. **toRef / toRefs**：解决 reactive 解构丢失响应式问题
+
+#### 补充：computed / watch / watchEffect
+- `computed`：惰性执行、带缓存，依赖不变不重新计算
+- `watch`：手动指定监听源，支持 `immediate`、`deep`
+- `watchEffect`：自动收集依赖，初始化立即执行
+
+#### 源码位置
+`packages/reactivity/` 目录
+
+---
+
+### 3. 异步更新队列 & $nextTick
+#### 设问
+数据更新为何不立即刷新？nextTick 原理与异步优先级？
+
+#### 原理
+Vue 采用**异步批量更新**：
+同一事件循环内多次修改数据，Watcher 会去重存入队列，等当前宏任务执行完毕后，再批量更新视图，提升性能。
+
+#### nextTick 异步降级策略（优先级从高到低）
+1. `Promise.then`（微任务）
+2. `MutationObserver`（微任务）
+3. `setImmediate`（宏任务）
+4. `setTimeout(fn, 0)`（兜底宏任务）
+
+#### 使用场景
+修改数据后，需要立即操作更新后的 DOM，代码放入 `$nextTick` 回调。
+
+#### 源码位置
+- Vue2：`src/core/util/next-tick.js`
+- Vue3：`runtime-core/scheduler.ts`
+
+---
+
+## 三、模板编译模块
+### 设问
+template 编译流程、完整版/运行时版区别、Vue3 编译优化？
+
+### 编译三阶段
+1. **Parse 解析**：模板字符串 → AST 抽象语法树（正则 + 栈解析）
+2. **Optimize 优化**：标记静态节点，Diff 时跳过对比
+3. **Generate 生成代码**：AST → 拼接生成 `render` 渲染函数
+
+### 版本区别
+- **运行时版**：无编译器，体积小，只支持 render 函数
+- **完整版**：内置编译器，可直接在浏览器编译 template
+
+### Vue3 编译优化
+- **静态提升**：静态节点提升到 render 外部，避免重复创建
+- **PatchFlag**：标记动态节点，Diff 只对比标记节点
+- **Block 树**：收集动态节点，缩小 Diff 范围
+
+#### 源码位置
+- Vue2：`src/compiler/`
+- Vue3：`packages/compiler-core/`
+
+---
+
+## 四、生命周期 & 内置 API
+### 1. 生命周期执行时机
+- `beforeCreate / created`：实例初始化阶段，`created` 可访问 data、methods，无 DOM
+- `beforeMount / mounted`：DOM 挂载前后，`mounted` 可操作真实 DOM
+- `beforeUpdate / updated`：数据更新、视图重渲染前后
+- `beforeUnmount / unmounted`：组件销毁前后
+
+#### 源码位置
+`src/core/instance/lifecycle.js`
+
+### 2. 自定义事件 & 插槽
+- `$emit`：基于内部事件中心派发自定义事件
+- 插槽：编译为子 VNode 传递给子组件；作用域插槽可实现子向父传值
+
+#### 源码位置
+事件：`src/core/instance/events.js`
+
+---
+
+## 五、Vue3 独有高频考点
+1. **Composition API**：按功能聚合逻辑，优于 Options API，便于逻辑复用
+2. **setup**：执行在 `beforeCreate` 之前，内部无法使用 `this`
+3. **Teleport**：改变 VNode 对应的 DOM 挂载位置，脱离组件层级
+4. **Suspense**：处理异步组件、异步 setup，实现加载占位效果
+
+---
+
+## 六、高频对比题（背诵）
+1. **Vue2 vs Vue3 响应式**
+   - Vue2：`Object.defineProperty`，劫持单个属性，存在监听缺陷
+   - Vue3：`Proxy`，劫持整个对象，监听全面、惰性劫持性能更好
+
+2. **Vue2 vs Vue3 Diff**
+   - Vue2：双端对比，长列表性能一般
+   - Vue3：最长递增子序列 + 编译标记，Diff 效率大幅提升
+
+3. **ref vs reactive**
+   - ref：适配基本类型，需 `.value` 访问
+   - reactive：适配引用类型，直接访问
+
+4. **computed vs watch**
+   - computed：有缓存、依赖驱动、必须返回值
+   - watch：无缓存，侧重业务逻辑处理
+---
+
+##其他问题
+1.**虚拟 DOM 的Diff算法是如何实现的？**
+结合 Vue2、Vue3 分别拆解 **Diff 算法完整实现逻辑**，包含执行流程、核心规则、源码逻辑、列表比对细节，附关键代码与差异对比。
+
+# 一、Diff 前置基础
+## 1. 核心定位
+Diff 发生在 `patch` 阶段：**新旧 VNode 对比，最小化 DOM 操作**，最终更新真实 DOM。
+## 2. 通用原则（Vue2/Vue3 一致）
+1. **同层比较**：只对比同一层级节点，不跨层级移动 DOM（跨层级操作成本极高）。
+2. **先判断节点类型**
+   - 节点**标签不同**：直接销毁旧节点，新建并挂载新节点。
+   - 节点**标签相同**：复用 DOM，对比属性、文本、子节点。
+3. 执行顺序：`根节点对比 → 属性对比 → 子节点对比`。
+
+---
+
+# 二、Vue2 Diff 实现（双端比较）
+## 整体流程
+`patch` → `patchVnode`（普通节点） → `updateChildren`（列表子节点，核心）
+
+### 1. 普通节点：patchVnode
+处理标签相同的节点，逻辑分步：
+1. 新旧节点**文本内容不同**：直接更新 DOM 文本。
+2. 都有文本、内容一致：不处理。
+3. 对比节点属性：更新/新增/删除 DOM 属性。
+4. 处理子节点：进入 `updateChildren` 列表 Diff。
+
+简化伪代码：
+```js
+function patchVnode(oldVnode, newVnode) {
+  const el = oldVnode.el; // 复用真实DOM
+  // 文本节点对比
+  if (oldVnode.text !== newVnode.text) {
+    el.textContent = newVnode.text;
+  }
+  // 对比属性
+  updateProps(el, oldVnode.props, newVnode.props);
+  // 对比子节点
+  updateChildren(el, oldVnode.children, newVnode.children);
+}
+```
+
+### 2. 列表 Diff：updateChildren（双端遍历核心）
+针对 `v-for` 列表，**双端比较算法**，维护 4 个索引指针：
+- `oldStartIdx`：旧列表头部索引
+- `oldEndIdx`：旧列表尾部索引
+- `newStartIdx`：新列表头部索引
+- `newEndIdx`：新列表尾部索引
+
+#### 循环终止条件
+`oldStartIdx > oldEndIdx` 或 `newStartIdx > newEndIdx`
+
+#### 四大比对场景（按优先级执行）
+依次尝试 4 种匹配，命中则移动指针 / 移动 DOM：
+1. **旧首 === 新首**
+   节点匹配，复用 DOM；`oldStartIdx++`、`newStartIdx++`
+2. **旧尾 === 新尾**
+   节点匹配，复用 DOM；`oldEndIdx--`、`newEndIdx--`
+3. **旧首 === 新尾**
+   头部节点匹配新尾部，将旧首 DOM **移动到旧列表尾部**；
+   `oldStartIdx++`、`newEndIdx--`
+4. **旧尾 === 新首**
+   尾部节点匹配新头部，将旧尾 DOM **移动到旧列表头部**；
+   `oldEndIdx--`、`newStartIdx++`
+
+#### 都不匹配（兜底逻辑）
+1. 用 `key` 在**旧列表剩余节点**中查找当前新首节点。
+2. 找不到：说明是**新节点**，创建 DOM 插入到旧列表头部。
+3. 找到：复用对应 DOM，移动到旧列表头部。
+
+#### 循环结束后收尾
+1. **旧节点先遍历完**：新列表还有剩余节点 → 批量创建新 DOM 追加。
+2. **新节点先遍历完**：旧列表还有剩余节点 → 批量删除多余 DOM。
+
+### 3. Vue2 Diff 缺陷
+- 纯双端比对，**长乱序列表**下 DOM 移动次数多，性能一般。
+- 无编译阶段优化，全量对比所有节点。
+
+---
+
+# 三、Vue3 Diff 实现（优化版）
+Vue3 在 **编译时 + 运行时** 双层优化，分为：**非列表节点 Diff** + **列表 Diff（最长递增子序列）**
+
+## 1. 编译时前置优化（大幅减少 Diff 范围）
+### （1）PatchFlag 动态标记
+编译模板时，给**动态节点**打上标记（文本、class、style、指令等）。
+Diff 时**只对比带标记的动态节点**，静态节点直接跳过。
+
+### （2）静态提升
+纯静态节点（内容永远不变）提升到 `render` 函数外部，避免每次渲染重复创建 VNode。
+
+### （3）Block 树
+将当前组件内**所有动态节点**收集到 Block，Diff 仅遍历 Block 内节点，进一步缩小范围。
+
+## 2. 运行时：列表 Diff 核心（最长递增子序列 LIS）
+Vue3 放弃纯双端遍历，核心思路：**尽量少移动 DOM**。
+
+### 执行步骤
+#### 步骤1：建立 Key 索引映射
+用 `key` 创建 `keyToNewIndexMap`，快速通过 key 找到新列表中的索引，时间复杂度 O(1)。
+
+#### 步骤2：删除旧列表中已不存在的节点
+遍历旧列表，key 在新映射中找不到 → 直接删除对应 DOM。
+
+#### 步骤3：生成 索引数组
+基于新旧节点匹配关系，生成 `newIndexToOldIndex` 数组，描述**新节点在旧列表中的位置**。
+
+#### 步骤4：计算「最长递增子序列」
+对上面的索引数组求解 **最长递增子序列**：
+- 序列内的节点：相对顺序没变，**不需要移动 DOM**。
+- 序列外的节点：逐个移动到对应位置。
+
+> 核心优势：最大化保留原有 DOM 顺序，**DOM 移动次数降到最少**，长列表性能远优于 Vue2。
+
+### 简化逻辑总结
+1. 删：旧列表冗余节点直接删除。
+2. 查：通过 key 快速匹配新旧节点。
+3. 算：算出无需移动的节点序列。
+4. 移：只移动非序列节点，新增节点直接创建插入。
+
+---
+
+# 四、key 的作用（Diff 配套考点）
+1. **唯一标识**：Diff 时通过 key 精准匹配新旧 VNode，正确复用 DOM。
+2. 不写 key：Vue 启用**就地更新**，按位置强制复用节点，易出现状态错乱。
+3. 用 `index` 做 key：列表增删后 index 重置，key 失效，节点复用异常。
+
+---
+
+# 五、Vue2 与 Vue3 Diff 核心对比
+| 维度 | Vue2 | Vue3 |
+| ---- | ---- | ---- |
+| 算法 | 双端比较 | 双端预处理 + 最长递增子序列 |
+| 编译优化 | 无 | PatchFlag、静态提升、Block 树 |
+| 列表性能 | 长乱序列表较差 | 长列表/乱序列表性能大幅提升 |
+| 比对范围 | 全量节点比对 | 仅比对动态节点 |
+
+---
+
+# 六、完整执行链路汇总
+## Vue2
+`数据更新 → 触发响应式 → 异步队列执行更新 → patch → patchVnode(普通节点) / updateChildren(列表双端Diff) → 更新DOM`
+
+## Vue3
+`数据更新 → 调度器触发更新 → patch → 依据PatchFlag/Block过滤静态节点 → 列表走最长递增子序列Diff → 更新DOM`
+
+
+
